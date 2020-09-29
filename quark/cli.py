@@ -7,6 +7,7 @@ from quark.logo import logo
 from quark.utils.out import print_success, print_info, print_warning
 from quark.utils.weight import Weight
 from tqdm import tqdm
+import git
 
 logo()
 
@@ -21,14 +22,26 @@ logo()
 )
 @click.option(
     "-a", "--apk", help="APK file", type=click.Path(exists=True, file_okay=True, dir_okay=False),
-    required=True,
+    required=False,
 )
 @click.option(
     "-r", "--rule", help="Rules folder need to be checked",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True), required=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True), required=False,
 )
-def entry_point(summary, detail, apk, rule, output):
+@click.option("-u", "--update-rules", is_flag=True,
+              help="Download the latest rules in latest_rules directory",
+              )
+def entry_point(summary, detail, apk, rule, output, update_rules):
     """Quark is an Obfuscation-Neglect Android Malware Scoring System"""
+
+    if update_rules:
+
+        try:
+            git.Repo.clone_from(url='https://github.com/quark-engine/quark-rules', to_path='latest_rules')
+            print_success("Complete downloading the latest rules")
+        except git.GitCommandError:
+            # destination path already exists and is not an empty directory, change it to git pull
+            print_warning("latest_rules directory already exists, using `git pull` in latest_rules directory")
 
     if summary:
         # show summary report
