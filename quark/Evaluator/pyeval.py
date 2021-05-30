@@ -1,24 +1,27 @@
-# Thanks for the description of Dalvik bytecode instruction from the following websites, some of our explanations or
-# comments will quote from it.
+# -*- coding: utf-8 -*-
+# This file is part of Quark-Engine - https://github.com/quark-engine/quark-engine
+# See the file 'LICENSE' for copying permission.
+# Thanks for the description of Dalvik bytecode instruction from the following
+# websites, some of our explanations or comments will quote from it.
 # https://source.android.google.cn/devices/tech/dalvik/instruction-formats
 # http://pallergabor.uw.hu/androidblog/dalvik_opcodes.html
 
 import logging
+import re
 from datetime import datetime
 
+from quark.Objects.registerobject import RegisterObject
 from quark.Objects.tableobject import TableObject
-from quark.Objects.variableobject import RegisterObject
 
 MAX_REG_COUNT = 40
 TIMESTAMPS = datetime.now().strftime('%Y-%m-%d')
 LOG_FILENAME = f"{TIMESTAMPS}.quark.log"
-logging.basicConfig(
-    level=logging.DEBUG,
-    filename=LOG_FILENAME,
-    filemode='w',
-    datefmt='%Y-%m-%d %H:%M:%S',
-)
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+handler = logging.FileHandler(LOG_FILENAME, mode='w')
+format_str = '%(asctime)s %(levelname)s [%(lineno)d]: %(message)s'
+handler.setFormatter(logging.Formatter(format_str))
+log.addHandler(handler)
 
 
 def logger(func):
@@ -331,10 +334,10 @@ class PyEval:
         try:
 
             array_obj = self.table_obj.get_obj_list(
-                int(instruction[2][1]),
+                int(re.sub("[^0-9]", "", instruction[2][1:])),
             ).pop()
             array_index = self.table_obj.get_obj_list(
-                int(instruction[3][1]),
+                int(re.sub("[^0-9]", "", instruction[3])),
             ).pop()
 
             variable_object = RegisterObject(

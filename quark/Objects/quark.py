@@ -1,9 +1,9 @@
-# This file is part of Quark Engine - https://quark-engine.rtfd.io
-# See GPLv3 for copying permission.
+# -*- coding: utf-8 -*-
+# This file is part of Quark-Engine - https://github.com/quark-engine/quark-engine
+# See the file 'LICENSE' for copying permission.
 
-import copy
 import operator
-from quark.utils.out import print_info, print_success
+
 from quark.Evaluator.pyeval import PyEval
 from quark.Objects.analysis import QuarkAnalysis
 from quark.Objects.apkinfo import Apkinfo
@@ -13,10 +13,17 @@ from quark.utils.colors import (
     bold,
     yellow,
     green,
+    lightblue,
+    magenta,
+    lightyellow,
 )
 from quark.utils.graph import call_graph
-from quark.utils.output import output_parent_function_table
+from quark.utils.out import print_info, print_success
+from quark.utils.output import output_parent_function_table, output_parent_function_json
 from quark.utils.weight import Weight
+import pandas as pd
+import os
+import numpy as np
 
 MAX_SEARCH_LAYER = 3
 CHECK_LIST = "".join(["\t[" + "\u2713" + "]"])
@@ -48,7 +55,7 @@ class Quark:
         if visited_methods is None:
             visited_methods = set()
 
-        method_set = self.apkinfo.upperfunc(base_method.class_name, base_method.name)
+        method_set = self.apkinfo.upperfunc(base_method)
         visited_methods.add(base_method)
 
         if method_set is not None:
@@ -62,21 +69,22 @@ class Quark:
                         continue
                     self.find_previous_method(item, parent_function, wrapper, visited_methods)
 
-    def find_intersection(self, first_method_list, second_method_list, depth=1):
+    def find_intersection(self, first_method_set, second_method_set, depth=1):
         """
         Find the first_method_list ∩ second_method_list.
         [MethodAnalysis, MethodAnalysis,...]
 
-        :param first_method_list: first list that contains each MethodAnalysis.
-        :param second_method_list: second list that contains each MethodAnalysis.
+        :param first_method_set: first list that contains each MethodAnalysis.
+        :param second_method_set: second list that contains each MethodAnalysis.
         :param depth: maximum number of recursive search functions.
         :return: a set of first_method_list ∩ second_method_list or None.
         """
         # Check both lists are not null
-        if first_method_list and second_method_list:
+
+        if first_method_set and second_method_set:
 
             # find ∩
-            result = set(first_method_list).intersection(second_method_list)
+            result = first_method_set & second_method_set
             if result:
                 return result
             else:
@@ -86,36 +94,28 @@ class Quark:
                     return None
 
                 # Append first layer into next layer.
-                next_list1 = copy.copy(first_method_list)
-                next_list2 = copy.copy(second_method_list)
+                next_level_set_1 = first_method_set.copy()
+                next_level_set_2 = second_method_set.copy()
 
-                # Extend the upper function into next layer.
-                for method in first_method_list:
-                    if self.apkinfo.upperfunc(method.class_name, method.name) is not None:
-                        next_list1.extend(
-                            self.apkinfo.upperfunc(
-                                method.class_name, method.name,
-                            ),
-                        )
-                for method in second_method_list:
-                    if self.apkinfo.upperfunc(method.class_name, method.name) is not None:
-                        next_list2.extend(
-                            self.apkinfo.upperfunc(
-                                method.class_name, method.name,
-                            ),
-                        )
+                # Extend the xref from function into next layer.
+                for method in first_method_set:
+                    if self.apkinfo.upperfunc(method):
+                        next_level_set_1 = self.apkinfo.upperfunc(method) | next_level_set_1
+                for method in second_method_set:
+                    if self.apkinfo.upperfunc(method):
+                        next_level_set_2 = self.apkinfo.upperfunc(method) | next_level_set_2
 
-                return self.find_intersection(next_list1, next_list2, depth)
+                return self.find_intersection(next_level_set_1, next_level_set_2, depth)
         else:
-            raise ValueError("List is Null")
+            raise ValueError("Set is Null")
 
     def check_sequence(self, mutual_parent, first_method_list, second_method_list):
         """
         Check if the first function appeared before the second function.
 
         :param mutual_parent: function that call the first function and second functions at the same time.
-        :param first_method_list: the first show up function, which is (class_name, method_name)
-        :param second_method_list: the second show up function, which is (class_name, method_name)
+        :param first_method_list: the first show up function, which is a MethodAnalysis
+        :param second_method_list: the second show up function, which is a MethodAnalysis
         :return: True or False
         """
         state = False
@@ -143,6 +143,12 @@ class Quark:
                 if tools.contains(sequence_pattern_method, method_list_need_check):
                     state = True
 
+                    # Record the mapping between the parent function and the wrapper method
+                    self.quark_analysis.parent_wrapper_mapping[
+                        mutual_parent.full_name] = self.apkinfo.get_wrapper_smali(mutual_parent,
+                                                                                  first_call_method,
+                                                                                  second_call_method)
+
         return state
 
     def check_parameter(self, parent_function, first_method_list, second_method_list):
@@ -162,9 +168,7 @@ class Quark:
                 pyeval = PyEval()
                 # Check if there is an operation of the same register
 
-                for bytecode_obj in self.apkinfo.get_method_bytecode(
-                        parent_function.class_name, parent_function.name,
-                ):
+                for bytecode_obj in self.apkinfo.get_method_bytecode(parent_function):
                     # ['new-instance', 'v4', Lcom/google/progress/SMSHelper;]
                     instruction = [bytecode_obj.mnemonic]
                     if bytecode_obj.registers is not None:
@@ -183,11 +187,18 @@ class Quark:
 
                         for c_func in val_obj.called_by_func:
 
-                            first_method_pattern = f"{first_call_method.class_name}->{first_call_method.name}"
-                            second_method_pattern = f"{second_call_method.class_name}->{second_call_method.name}"
+                            first_method_pattern = f"{first_call_method.class_name}->{first_call_method.name}{first_call_method.descriptor}"
+                            second_method_pattern = f"{second_call_method.class_name}->{second_call_method.name}{second_call_method.descriptor}"
 
                             if first_method_pattern in c_func and second_method_pattern in c_func:
                                 state = True
+
+                                # Record the mapping between the parent function and the wrapper method
+                                self.quark_analysis.parent_wrapper_mapping[
+                                    parent_function.full_name] = self.apkinfo.get_wrapper_smali(
+                                    parent_function,
+                                    first_call_method,
+                                    second_call_method)
 
                 # Build for the call graph
                 if state:
@@ -214,29 +225,34 @@ class Quark:
         self.quark_analysis.crime_description = rule_obj.crime
 
         # Level 1: Permission Check
-        if set(rule_obj.x1_permission).issubset(set(self.apkinfo.permissions)):
+        if self.apkinfo.ret_type == "DEX":
+            rule_obj.check_item[0] = True
+        elif set(rule_obj.permission).issubset(set(self.apkinfo.permissions)):
             rule_obj.check_item[0] = True
         else:
             # Exit if the level 1 stage check fails.
             return
 
         # Level 2: Single Native API Check
-        api_1_method_name = rule_obj.x2n3n4_comb[0]["method"]
-        api_1_class_name = rule_obj.x2n3n4_comb[0]["class"]
-        api_2_method_name = rule_obj.x2n3n4_comb[1]["method"]
-        api_2_class_name = rule_obj.x2n3n4_comb[1]["class"]
+        api_1_method_name = rule_obj.api[0]["method"]
+        api_1_class_name = rule_obj.api[0]["class"]
+        api_1_descriptor = rule_obj.api[0]["descriptor"]
 
-        first_api = self.apkinfo.find_method(api_1_class_name, api_1_method_name)
-        second_api = self.apkinfo.find_method(api_2_class_name, api_2_method_name)
+        api_2_method_name = rule_obj.api[1]["method"]
+        api_2_class_name = rule_obj.api[1]["class"]
+        api_2_descriptor = rule_obj.api[1]["descriptor"]
+
+        first_api = self.apkinfo.find_method(api_1_class_name, api_1_method_name, api_1_descriptor)
+        second_api = self.apkinfo.find_method(api_2_class_name, api_2_method_name, api_2_descriptor)
 
         if first_api is not None or second_api is not None:
             rule_obj.check_item[1] = True
 
             if first_api is not None:
-                first_api = list(self.apkinfo.find_method(api_1_class_name, api_1_method_name))[0]
+                first_api = self.apkinfo.find_method(api_1_class_name, api_1_method_name, api_1_descriptor)
                 self.quark_analysis.level_2_result.append(first_api)
             if second_api is not None:
-                second_api = list(self.apkinfo.find_method(api_2_class_name, api_2_method_name))[0]
+                second_api = self.apkinfo.find_method(api_2_class_name, api_2_method_name, api_2_descriptor)
                 self.quark_analysis.level_2_result.append(second_api)
         else:
             # Exit if the level 2 stage check fails.
@@ -254,8 +270,9 @@ class Quark:
 
         # Level 4: Sequence Check
         # Looking for the first layer of the upper function
-        first_api_xref_from = self.apkinfo.upperfunc(first_api.class_name, first_api.name)
-        second_api_xref_from = self.apkinfo.upperfunc(second_api.class_name, second_api.name)
+        first_api_xref_from = self.apkinfo.upperfunc(first_api)
+        second_api_xref_from = self.apkinfo.upperfunc(second_api)
+
         mutual_parent_function_list = self.find_intersection(first_api_xref_from, second_api_xref_from)
 
         if mutual_parent_function_list is not None:
@@ -317,26 +334,26 @@ class Quark:
         confidence = str(rule_obj.check_item.count(True) * 20) + "%"
         conf = rule_obj.check_item.count(True)
         weight = rule_obj.get_score(conf)
-        score = rule_obj.yscore
+        score = rule_obj.score
 
         # Assign level 1 examine result
         permissions = []
         if rule_obj.check_item[0]:
-            permissions = rule_obj.x1_permission
+            permissions = rule_obj.permission
 
         # Assign level 2 examine result
         api = []
         if rule_obj.check_item[1]:
-            for class_name, method_name in self.quark_analysis.level_2_result:
+            for item2 in self.quark_analysis.level_2_result:
                 api.append({
-                    "class": class_name,
-                    "method": method_name,
+                    "class": repr(item2.class_name),
+                    "method": repr(item2.name),
                 })
 
         # Assign level 3 examine result
         combination = []
         if rule_obj.check_item[2]:
-            combination = rule_obj.x2n3n4_comb
+            combination = rule_obj.api
 
         # Assign level 4 - 5 examine result if exist
         sequnce_show_up = []
@@ -344,18 +361,16 @@ class Quark:
 
         # Check examination has passed level 4
         if self.quark_analysis.level_4_result and rule_obj.check_item[3]:
-            for same_sequence_cls, same_sequence_md in self.quark_analysis.level_4_result:
+            for item4 in self.quark_analysis.level_4_result:
                 sequnce_show_up.append({
-                    "class": repr(same_sequence_cls),
-                    "method": repr(same_sequence_md),
+                    repr(item4.full_name): self.quark_analysis.parent_wrapper_mapping[item4.full_name]
                 })
 
             # Check examination has passed level 5
             if self.quark_analysis.level_5_result and rule_obj.check_item[4]:
-                for same_operation_cls, same_operation_md in self.quark_analysis.level_5_result:
+                for item5 in self.quark_analysis.level_5_result:
                     same_operation_show_up.append({
-                        "class": repr(same_operation_cls),
-                        "method": repr(same_operation_md),
+                        repr(item5.full_name): self.quark_analysis.parent_wrapper_mapping[item5.full_name]
                     })
 
         crime = {
@@ -376,7 +391,17 @@ class Quark:
         # add the score
         self.quark_analysis.score_sum += score
 
-    def show_summary_report(self, rule_obj):
+    def add_table_row(self, name, rule_obj, confidence, score, weight):
+
+        self.quark_analysis.summary_report_table.add_row([
+            name,
+            green(rule_obj.crime),
+            yellow(confidence),
+            score,
+            red(weight),
+        ])
+
+    def show_summary_report(self, rule_obj, threshold=None):
         """
         Show the summary report.
 
@@ -384,21 +409,84 @@ class Quark:
         :return: None
         """
         # Count the confidence
-        confidence = str(rule_obj.check_item.count(True) * 20) + "%"
+        confidence = f"{rule_obj.check_item.count(True) * 20}%"
         conf = rule_obj.check_item.count(True)
         weight = rule_obj.get_score(conf)
-        score = rule_obj.yscore
+        score = rule_obj.score
+        name = rule_obj.rule_filename
 
-        self.quark_analysis.summary_report_table.add_row([
-            green(rule_obj.crime), yellow(
-                confidence,
-            ), score, red(weight),
-        ])
+        if threshold:
+
+            if rule_obj.check_item.count(True) * 20 >= int(threshold):
+                self.add_table_row(name, rule_obj, confidence, score, weight)
+
+        else:
+            self.add_table_row(name, rule_obj, confidence, score, weight)
 
         # add the weight
         self.quark_analysis.weight_sum += weight
         # add the score
         self.quark_analysis.score_sum += score
+
+    def show_label_report(self, rule_path, all_labels, table_version):
+        """
+        Show the report based on label, last column represents max confidence for that label
+        :param rule_path: the path where may be present the file label_desc.csv.
+        :param all_labels: dictionary containing label:<array of confidence values associated to that label>
+        :return: None
+        """
+        label_desc = {}
+        # clear table to manage max/detail version
+        self.quark_analysis.label_report_table.clear()
+        if os.path.isfile(os.path.join(rule_path, "label_desc.csv")):
+            # associate to each label a description
+            col_list = ["label", "description"]
+            # csv file on form <label,description>
+            # put this file in the folder of rules (it must not be a json file since it could create conflict with management of rules)
+            df = pd.read_csv(
+                os.path.join(rule_path, "label_desc.csv"), usecols=col_list
+            )
+            label_desc = dict(zip(df["label"], df["description"]))
+
+        for label_name in all_labels:
+            confidences = np.array(all_labels[label_name])
+
+            if table_version == "max":
+                self.quark_analysis.label_report_table.field_names = [
+                    "Label",
+                    "Description",
+                    "Number of rules",
+                    "MAX Confidence %",
+                ]
+                self.quark_analysis.label_report_table.add_row(
+                    [
+                        green(label_name),
+                        yellow(label_desc.get(label_name, "-")),
+                        (len(confidences)),
+                        red(np.max(confidences)),
+                    ]
+                )
+            else:
+                self.quark_analysis.label_report_table.field_names = [
+                    "Label",
+                    "Description",
+                    "Number of rules",
+                    "MAX Confidence %",
+                    "AVG Confidence",
+                    "Std Deviation",
+                    "# of Rules with Confidence >= 80%",
+                ]
+                self.quark_analysis.label_report_table.add_row(
+                    [
+                        green(label_name),
+                        yellow(label_desc.get(label_name, "-")),
+                        (len(confidences)),
+                        red(np.max(confidences)),
+                        magenta(round(np.mean(confidences), 2)),
+                        lightblue(round(np.std(confidences), 2)),
+                        lightyellow(np.count_nonzero(confidences >= 80)),
+                    ]
+                )
 
     def show_detail_report(self, rule_obj):
         """
@@ -419,7 +507,7 @@ class Quark:
             print(green(bold("1.Permission Request")), end="")
             print("")
 
-            for permission in rule_obj.x1_permission:
+            for permission in rule_obj.permission:
                 print(f"\t\t {permission}")
         if rule_obj.check_item[1]:
             print(red(CHECK_LIST), end="")
@@ -434,10 +522,10 @@ class Quark:
 
             print("")
             print(
-                f"\t\t ({rule_obj.x2n3n4_comb[0]['class']}, {rule_obj.x2n3n4_comb[0]['method']})",
+                f"\t\t ({rule_obj.api[0]['class']}, {rule_obj.api[0]['method']})",
             )
             print(
-                f"\t\t ({rule_obj.x2n3n4_comb[1]['class']}, {rule_obj.x2n3n4_comb[1]['method']})",
+                f"\t\t ({rule_obj.api[1]['class']}, {rule_obj.api[1]['method']})",
             )
         if rule_obj.check_item[3]:
 
@@ -465,6 +553,7 @@ class Quark:
     def show_rule_classification(self):
         print_info("Rules Classification")
         output_parent_function_table(self.quark_analysis.call_graph_analysis_list)
+        output_parent_function_json(self.quark_analysis.call_graph_analysis_list)
 
 
 if __name__ == "__main__":

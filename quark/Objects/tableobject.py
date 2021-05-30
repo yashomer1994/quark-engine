@@ -1,9 +1,12 @@
-# This file is part of Quark Engine - https://quark-engine.rtfd.io
-# See GPLv3 for copying permission.
+# -*- coding: utf-8 -*-
+# This file is part of Quark-Engine - https://github.com/quark-engine/quark-engine
+# See the file 'LICENSE' for copying permission.
 
 
 class TableObject:
     """This table is used to track the usage of variables in the register"""
+
+    __slots__ = ["hash_table"]
 
     def __init__(self, count_reg):
         """
@@ -25,7 +28,10 @@ class TableObject:
         :param var_obj: instance of VariableObject
         :return: None
         """
-        self.hash_table[index].append(var_obj)
+        try:
+            self.hash_table[index].append(var_obj)
+        except IndexError:
+            pass
 
     def get_obj_list(self, index):
         """
@@ -34,7 +40,10 @@ class TableObject:
         :param index: the index to get the corresponding VariableObject
         :return: a list containing VariableObject
         """
-        return self.hash_table[index]
+        try:
+            return self.hash_table[index]
+        except IndexError:
+            return None
 
     def get_table(self):
         """

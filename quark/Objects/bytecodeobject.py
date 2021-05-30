@@ -1,9 +1,12 @@
-# This file is part of Quark Engine - https://quark-engine.rtfd.io
-# See GPLv3 for copying permission.
+# -*- coding: utf-8 -*-
+# This file is part of Quark-Engine - https://github.com/quark-engine/quark-engine
+# See the file 'LICENSE' for copying permission.
 
 
 class BytecodeObject:
     """BytecodeObject is used to store the instructions in smali, including mnemonic, registers, parameter"""
+
+    __slots__ = ["_mnemonic", "_registers", "_parameter"]
 
     def __init__(self, mnemonic, registers, parameter):
         """

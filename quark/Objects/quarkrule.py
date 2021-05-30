@@ -1,11 +1,24 @@
-# This file is part of Quark Engine - https://quark-engine.rtfd.io
-# See GPLv3 for copying permission.
+# -*- coding: utf-8 -*-
+# This file is part of Quark-Engine - https://github.com/quark-engine/quark-engine
+# See the file 'LICENSE' for copying permission.
+
 import json
 import os
 
 
 class QuarkRule:
     """RuleObject is used to store the rule from json file"""
+
+    __slots__ = [
+        "check_item",
+        "_json_obj",
+        "_crime",
+        "_permission",
+        "_api",
+        "_score",
+        "rule_filename",
+        "_label",
+    ]
 
     def __init__(self, json_filename):
         """
@@ -19,10 +32,11 @@ class QuarkRule:
         with open(json_filename) as json_file:
             self._json_obj = json.loads(json_file.read())
             self._crime = self._json_obj["crime"]
-            self._x1_permission = self._json_obj["x1_permission"]
-            self._x2n3n4_comb = self._json_obj["x2n3n4_comb"]
-            self._yscore = self._json_obj["yscore"]
+            self._permission = self._json_obj["permission"]
+            self._api = self._json_obj["api"]
+            self._score = self._json_obj["score"]
             self.rule_filename = os.path.basename(json_filename)
+            self._label = self._json_obj["label"]
 
     def __repr__(self):
         return f"<RuleObject-{self.rule_filename}>"
@@ -37,31 +51,31 @@ class QuarkRule:
         return self._crime
 
     @property
-    def x1_permission(self):
+    def permission(self):
         """
         Permission requested by the apk to practice the crime.
 
         :return: a list of given permissions
         """
-        return self._x1_permission
+        return self._permission
 
     @property
-    def x2n3n4_comb(self):
+    def api(self):
         """
         Key native APIs that do the action and target in order.
 
         :return: a list recording the APIs class_name and method_name in order
         """
-        return self._x2n3n4_comb
+        return self._api
 
     @property
-    def yscore(self):
+    def score(self):
         """
         The value used to calculate the weighted score
 
         :return: integer
         """
-        return self._yscore
+        return self._score
 
     def get_score(self, confidence):
         """
@@ -75,7 +89,7 @@ class QuarkRule:
         """
         if confidence == 0:
             return 0
-        return (2 ** (confidence - 1) * self._yscore) / 2 ** 4
+        return (2 ** (confidence - 1) * self._score) / 2 ** 4
 
 
 if __name__ == "__main__":

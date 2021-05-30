@@ -10,12 +10,12 @@ def rule_obj(scope="function"):
     rule_json = """
     {
         "crime": "Send Location via SMS",
-        "x1_permission": [
+        "permission": [
             "android.permission.SEND_SMS",
             "android.permission.ACCESS_COARSE_LOCATION",
             "android.permission.ACCESS_FINE_LOCATION"
         ],
-        "x2n3n4_comb": [
+        "api": [
             {
                 "class": "Landroid/telephony/TelephonyManager",
                 "method": "getCellLocation"
@@ -25,7 +25,11 @@ def rule_obj(scope="function"):
                 "method": "sendTextMessage"
             }
         ],
-        "yscore": 4
+        "score": 4,
+        "label": [
+        "location",
+        "collection"
+    ]
     }
     """
 
@@ -52,7 +56,7 @@ class TestRuleObject:
             "android.permission.ACCESS_FINE_LOCATION",
         ]
 
-        assert rule_obj.x1_permission == expected_permissions
+        assert rule_obj.permission == expected_permissions
 
         expected_x2n3n4_comb = [
             {
@@ -62,12 +66,11 @@ class TestRuleObject:
             {"class": "Landroid/telephony/SmsManager", "method": "sendTextMessage"},
         ]
 
-        assert rule_obj.x2n3n4_comb == expected_x2n3n4_comb
+        assert rule_obj.api == expected_x2n3n4_comb
 
-        assert rule_obj.yscore == 4
+        assert rule_obj.score == 4
 
     def test_get_score(self, rule_obj):
-
         confidence = [1, 2, 3, 4, 5]
         expected_value = [0.25, 0.5, 1.0, 2.0, 4.0]
         for idx, value in enumerate(expected_value):

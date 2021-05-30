@@ -1,12 +1,34 @@
+import os
 import pytest
+import requests
 
 from quark.Objects.quark import Quark
+from quark.Objects.quarkrule import QuarkRule
+
+APK_SOURCE = "https://github.com/quark-engine/apk-malware-samples" \
+             "/raw/master/14d9f1a92dd984d6040cc41ed06e273e.apk"
+APK_FILENAME = "14d9f1a92dd984d6040cc41ed06e273e.apk"
 
 
 @pytest.fixture()
 def result(scope="function"):
-    apk_file = "quark/sample/14d9f1a92dd984d6040cc41ed06e273e.apk"
+    r = requests.get(APK_SOURCE, allow_redirects=True)
+    open(APK_FILENAME, "wb").write(r.content)
+
+    apk_file = APK_FILENAME
     data = Quark(apk_file)
+    # rule
+    rules = "quark/rules"
+    rules_list = os.listdir(rules)
+    for single_rule in rules_list:
+        if single_rule.endswith("json"):
+            rulepath = os.path.join(rules, single_rule)
+            rule_checker = QuarkRule(rulepath)
+
+            # Run the checker
+            data.run(rule_checker)
+            data.generate_json_report(rule_checker)
+
     yield data
 
 
@@ -15,11 +37,12 @@ class TestQuark():
     def test_find_previous_method(self, result):
         # Test Case 1
 
-        parent_function = list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage"))[
-            0]
-        expect_method_analysis = list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms"))[0]
+        parent_function = result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage", "()V")
+        expect_method_analysis = result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms",
+                                                            "(Ljava/lang/String; Ljava/lang/String;)I")
 
-        first_base_method = list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms"))[0]
+        first_base_method = result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms",
+                                                       "(Ljava/lang/String; Ljava/lang/String;)I")
 
         expected_list = [expect_method_analysis]
 
@@ -33,10 +56,11 @@ class TestQuark():
 
         wrapper = []
 
-        second_base_method = list(result.apkinfo.find_method("Landroid/telephony/TelephonyManager", "getCellLocation"))[
-            0]
+        second_base_method = result.apkinfo.find_method("Landroid/telephony/TelephonyManager", "getCellLocation",
+                                                        "()Landroid/telephony/CellLocation;")
 
-        expect_method_analysis = list(result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation"))[0]
+        expect_method_analysis = result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation",
+                                                            "()Ljava/lang/String;")
 
         expected_list = [expect_method_analysis]
 
@@ -45,94 +69,85 @@ class TestQuark():
         assert wrapper == expected_list
 
     def test_find_intersection(self, result):
-        location_api_upper = list(result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation"))
-        sms_api_upper = list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms"))
-        contact_api_upper = [
-            list(result.apkinfo.find_method("Lcom/google/progress/APNOperator;", "addAPN"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/ContactsCollecter;", "getPhoneNumbers"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/APNOperator;", "getAPNList"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "readSMSList"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/ContactsCollecter;", "getEmail"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/APNOperator;", "checkAPNisAvailable"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/APNOperator;", "deleteAPN"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/ContactsCollecter;", "getContactList"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/GetCallLog;", "getCallLog"))[0],
-        ]
+        location_api = result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation",
+                                                  "()Ljava/lang/String;")
+        location_api_upper = result.apkinfo.upperfunc(location_api)
 
-        with pytest.raises(ValueError, match="List is Null"):
-            result.find_intersection([], [])
-            result.find_intersection([], [1])
-            result.find_intersection([1], [])
+        sms_api = result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms",
+                                             "(Ljava/lang/String; Ljava/lang/String;)I")
+        sms_api_upper = result.apkinfo.upperfunc(sms_api)
 
-        assert len(set(location_api_upper).intersection(sms_api_upper)) == 0
+        with pytest.raises(ValueError, match="Set is Null"):
+            result.find_intersection(set(), set())
+            result.find_intersection(set(), {1})
+            result.find_intersection({1}, set())
+
+        assert len(location_api_upper & sms_api_upper) == 3
 
         # When there is no intersection in first layer, it will try to enter
         # the second layer to check the intersection.
 
         # Send Location via SMS
         expected_result_location = {
-            list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "doByte"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage"))[0],
-            list(result.apkinfo.find_method(r"Lcom/google/progress/AndroidClientService\$2;", "run"))[0],
+            result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "doByte", "([B)V"),
+            result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage", "()V"),
+            result.apkinfo.find_method("Lcom/google/progress/AndroidClientService$2;", "run", "()V"),
         }
 
-        # Send contact via SMS
-        expected_result_contact = {
-            list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "doByte"))[0],
-            list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage"))[0],
-        }
-
-        assert result.find_intersection(
-            location_api_upper,
-            sms_api_upper,
-        ) == expected_result_location
-
-        assert result.find_intersection(
-            contact_api_upper,
-            sms_api_upper,
-        ) == expected_result_contact
+        assert result.find_intersection(location_api_upper, sms_api_upper) == expected_result_location
 
     def test_check_sequence(self, result):
         # Send Location via SMS
 
-        location_method = list(result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation"))
-        sendSms_method = list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms"))
+        location_method = result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation",
+                                                     "()Ljava/lang/String;")
+        sendSms_method = result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms",
+                                                    "(Ljava/lang/String; Ljava/lang/String;)I")
 
-        mutual_parent_true = list(
-            result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage"))[0]
-        mutual_parent_false = list(
-            result.apkinfo.find_method(
-                r"Lcom/google/progress/AndroidClientService\$2;", "run",
-            ))[0]
+        mutual_parent_true = result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage",
+                                                        "()V")
+
+        mutual_parent_false = result.apkinfo.find_method("Lcom/google/progress/AndroidClientService$2;", "run", "()V")
 
         # # Send contact via SMS
 
-        contact_method = list(result.apkinfo.find_method(
+        contact_method = result.apkinfo.find_method(
             "Lcom/google/progress/ContactsCollecter;",
-            "getContactList"
-        ))
+            "getContactList",
+            "()Ljava/lang/String;"
+        )
 
         assert result.check_sequence(
             mutual_parent_true,
-            location_method,
-            sendSms_method,
-        ) == True
+            [location_method],
+            [sendSms_method],
+
+        ) is True
+
         assert result.check_sequence(
             mutual_parent_true,
-            contact_method,
-            sendSms_method,
-        ) == True
+            [contact_method],
+            [sendSms_method],
+
+        ) is True
 
         assert result.check_sequence(
             mutual_parent_false,
-            contact_method,
-            sendSms_method,
-        ) == False
+            [contact_method],
+            [sendSms_method],
+        ) is False
 
     def test_check_parameter(self, result):
-        second_method = list(result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms"))
-        first_method = list(result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation"))
-        mutual_parent = list(result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage"))[
-            0]
+        second_method = [result.apkinfo.find_method("Lcom/google/progress/SMSHelper;", "sendSms",
+                                                    "(Ljava/lang/String; Ljava/lang/String;)I")]
+        first_method = [
+            result.apkinfo.find_method("Lcom/google/progress/Locate;", "getLocation", "()Ljava/lang/String;")]
+        mutual_parent = result.apkinfo.find_method("Lcom/google/progress/AndroidClientService;", "sendMessage", "()V")
 
         assert result.check_parameter(mutual_parent, first_method, second_method) == True
+
+    def test_get_json_report(self, result):
+        json_report = result.get_json_report()
+        # Check if proper dict object
+        assert isinstance(json_report, dict)
+        assert json_report.get("md5") == "14d9f1a92dd984d6040cc41ed06e273e"
